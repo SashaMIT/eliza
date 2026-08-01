@@ -444,7 +444,9 @@ describe("required-service readiness", () => {
       scenarioWithServices("credentialless-wallet", ["token-info"]),
     );
 
-    expect(services.get("token-info")).toBeInstanceOf(Service);
+    const tokenInfo = services.get("token-info");
+    expect(tokenInfo).toBeDefined();
+    expect(tokenInfo).toBe(runtime.getService("token-info"));
     await expect(
       runtime.getServiceLoadPromise("birdeye"),
     ).rejects.toMatchObject({
