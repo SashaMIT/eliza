@@ -116,7 +116,7 @@ describe("agent entry character passthrough", () => {
           },
         ],
       },
-    } as ElizaConfig);
+    } as unknown as ElizaConfig);
 
     expect(character.settings?.discord).toEqual({ autoReply: true });
     expect(character.settings?.ADVANCED_CAPABILITIES).toBe("true");
