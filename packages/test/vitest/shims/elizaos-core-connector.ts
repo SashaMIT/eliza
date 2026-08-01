@@ -23,6 +23,10 @@ export {
   getConnectorAccountManager,
   resetConnectorAccountManagerForTests,
 } from "../../../core/src/connectors/account-manager.ts";
+export {
+  connectorAccountCredentialSettingKey,
+  connectorBaseCredentialSettingKey,
+} from "../../../core/src/connectors/connector-config.ts";
 export { readRequestedConnectorRole } from "../../../core/src/connectors/oauth-role.ts";
 // Real (unstubbed) structured-error foundation. Plugins' fail-fast throw sites
 // (#12182 family) construct these; keep the genuine class so instanceof / code
