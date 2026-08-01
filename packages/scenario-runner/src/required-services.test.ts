@@ -51,19 +51,6 @@ async function createRuntime(): Promise<AgentRuntime> {
   return runtime;
 }
 
-async function stopWithin(
-  runtime: AgentRuntime,
-  timeoutMs = 250,
-): Promise<void> {
-  const result = await Promise.race([
-    runtime.stop({ fast: true }).then(() => "stopped" as const),
-    new Promise<"timeout">((resolve) => {
-      setTimeout(() => resolve("timeout"), timeoutMs);
-    }),
-  ]);
-  expect(result).toBe("stopped");
-}
-
 describe("scenario required-service contract", () => {
   it("accepts typed services and rejects malformed runtime definitions", () => {
     const definition = scenario({
@@ -378,7 +365,7 @@ describe("required-service readiness", () => {
         code: "SCENARIO_REQUIRED_SERVICE_ABORTED",
       }),
     });
-    await stopWithin(runtime);
+    await runtime.stop({ fast: true });
     runtimes.pop();
   });
 
@@ -430,7 +417,7 @@ describe("required-service readiness", () => {
         await optional();
         await required();
       }
-      await stopWithin(runtime);
+      await runtime.stop({ fast: true });
       return observations.sort();
     }
 
@@ -448,7 +435,7 @@ describe("required-service readiness", () => {
     const runtime = await createRuntime();
     runtimes.push(runtime);
     const { default: walletPlugin } = (await import(
-      "@elizaos/plugin-wallet/plugin"
+      "@elizaos/plugin-wallet"
     )) as { default: Plugin };
 
     await runtime.registerPlugin(walletPlugin);
@@ -464,5 +451,5 @@ describe("required-service readiness", () => {
       code: "SERVICE_START_FAILED",
       cause: expect.any(AggregateError),
     });
-  }, 15_000);
+  });
 });

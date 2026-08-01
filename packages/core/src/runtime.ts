@@ -3751,12 +3751,12 @@ export class AgentRuntime implements IAgentRuntime {
 			)) as ToolPolicyService | null;
 		} catch (error) {
 			// error-policy:J4 explicit user-facing degrade — a tool_policy service
-			// that fails to start must not block the turn; the designed no-policy
-			// behavior is "all actions allowed". Surfaced via reportError.
+			// that was configured but failed to start cannot safely authorize tools.
+			// Keep the turn alive with no executable actions and surface the failure.
 			this.reportError("AgentRuntime.getFilteredActions", error, {
 				serviceType: "tool_policy",
 			});
-			policyService = null;
+			return [];
 		}
 
 		if (!policyService || !context) {
@@ -3791,12 +3791,15 @@ export class AgentRuntime implements IAgentRuntime {
 			)) as ToolPolicyService | null;
 		} catch (error) {
 			// error-policy:J4 explicit user-facing degrade — a tool_policy service
-			// that fails to start must not block the turn; the designed no-policy
-			// behavior is "all actions allowed". Surfaced via reportError.
+			// that was configured but failed to start cannot safely authorize tools.
+			// Deny the action and surface the service failure.
 			this.reportError("AgentRuntime.isActionAllowed", error, {
 				serviceType: "tool_policy",
 			});
-			policyService = null;
+			return {
+				allowed: false,
+				reason: "Tool policy service failed to start",
+			};
 		}
 
 		if (!policyService) {
@@ -5114,7 +5117,7 @@ export class AgentRuntime implements IAgentRuntime {
 		// (plugin init -> getFilteredActions) would otherwise deadlock on the
 		// still-unresolved init barrier even though the instance is already up.
 		const alreadyRunning = this.services.get(key)?.[0];
-		if (alreadyRunning) return alreadyRunning;
+		if (alreadyRunning && this.initResolver) return alreadyRunning;
 		await this.initPromise;
 		if (this.stopped) return null;
 		const classes = this.serviceTypes.get(key);

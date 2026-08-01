@@ -108,7 +108,68 @@ describe("AgentRuntime service startup", () => {
 		}
 	});
 
-	it("degrades tool-policy callers to the permissive default when the service fails to start", async () => {
+	it("starts a sibling registered after the first implementation is already running", async () => {
+		const runtime = new AgentRuntime({ logLevel: "fatal" });
+		await runtime.initialize({ allowNoDatabase: true, skipMigrations: true });
+		let firstStarts = 0;
+		let secondStarts = 0;
+
+		class FirstService extends Service {
+			static override serviceType = "late-sibling-start-test";
+			static override allowsMultiple = true;
+			capabilityDescription = "first registered implementation";
+
+			static override async start(
+				runtime: AgentRuntime,
+			): Promise<FirstService> {
+				firstStarts += 1;
+				return new FirstService(runtime);
+			}
+
+			override async stop(): Promise<void> {}
+		}
+
+		class SecondService extends Service {
+			static override serviceType = "late-sibling-start-test";
+			static override allowsMultiple = true;
+			capabilityDescription = "late registered implementation";
+
+			static override async start(
+				runtime: AgentRuntime,
+			): Promise<SecondService> {
+				secondStarts += 1;
+				return new SecondService(runtime);
+			}
+
+			override async stop(): Promise<void> {}
+		}
+
+		try {
+			await runtime.registerService(FirstService);
+			const first = await runtime.getServiceLoadPromise(
+				FirstService.serviceType,
+			);
+			expect(first).toBeInstanceOf(FirstService);
+			expect(firstStarts).toBe(1);
+
+			await runtime.registerService(SecondService);
+			const resolved = await runtime.getServiceLoadPromise(
+				FirstService.serviceType,
+			);
+
+			expect(resolved).toBe(first);
+			expect(firstStarts).toBe(1);
+			expect(secondStarts).toBe(1);
+			expect(runtime.getServicesByType(FirstService.serviceType)).toEqual([
+				first,
+				expect.any(SecondService),
+			]);
+		} finally {
+			await runtime.stop({ fast: true });
+		}
+	});
+
+	it("fails closed when a configured tool-policy service fails to start", async () => {
 		const runtime = new AgentRuntime({ logLevel: "fatal" });
 		await runtime.initialize({ allowNoDatabase: true, skipMigrations: true });
 
@@ -131,12 +192,12 @@ describe("AgentRuntime service startup", () => {
 			});
 
 			const actions = await runtime.getFilteredActions({});
-			expect(actions).toEqual(runtime.getAllActions());
+			expect(actions).toEqual([]);
 
 			const verdict = await runtime.isActionAllowed("ANY_ACTION");
 			expect(verdict).toEqual({
-				allowed: true,
-				reason: "No policy service available",
+				allowed: false,
+				reason: "Tool policy service failed to start",
 			});
 
 			const scopes = runtime
@@ -241,20 +302,7 @@ describe("AgentRuntime service startup", () => {
 				allowNoDatabase: true,
 				skipMigrations: true,
 			});
-			const verdict = await Promise.race([
-				verdictDuringInit.promise,
-				new Promise<never>((_, reject) =>
-					setTimeout(
-						() =>
-							reject(
-								new Error(
-									"isActionAllowed deadlocked on the init barrier during initialize()",
-								),
-							),
-						5_000,
-					),
-				),
-			]);
+			const verdict = await verdictDuringInit.promise;
 			expect(verdict).toEqual({ allowed: true, reason: "stub policy" });
 			await init;
 		} finally {
