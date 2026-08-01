@@ -125,6 +125,12 @@ describe("shared-tier nav vocabulary contract", () => {
             `expected "${BUILTIN_NAV_PATHS[target.viewId]}"`,
         ).toBe(BUILTIN_NAV_PATHS[target.viewId]);
       }
+      if (hostPin) {
+        expect(
+          target.viewPath,
+          `host-owned target "${target.viewId}" must carry its canonical path`,
+        ).toBe(hostPin.path);
+      }
     }
   });
 

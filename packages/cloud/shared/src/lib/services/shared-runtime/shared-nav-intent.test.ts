@@ -153,4 +153,16 @@ describe("resolveSharedNavIntent", () => {
     expect(result.values.viewId).toBe("settings");
     expect(result.values.subview).toBe("voice");
   });
+
+  test("Cloud Apps carries the host-owned canonical path", () => {
+    const intent = resolveSharedNavIntent("open cloud apps");
+    expect(intent).toMatchObject({
+      viewId: "cloud-apps",
+      viewPath: "/cloud-apps",
+    });
+    expect(navIntentActionResult(intent!).values).toMatchObject({
+      viewId: "cloud-apps",
+      viewPath: "/cloud-apps",
+    });
+  });
 });
