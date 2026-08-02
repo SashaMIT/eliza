@@ -1,6 +1,8 @@
-// Pins the Windows CI sharding contract (#12338): grouped matrix lanes may
-// change names or ordering deliberately, but they must keep every command the
-// Windows compatibility lane is responsible for running.
+/**
+ * Pins the Windows CI sharding contract (#12338): grouped matrix lanes may
+ * change deliberately, but they must keep every command the compatibility
+ * lane is responsible for running.
+ */
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 
@@ -8,6 +10,9 @@ const workflowText = readFileSync(
   new URL("../../../.github/workflows/windows-ci.yml", import.meta.url),
   "utf8",
 );
+const workflow = Bun.YAML.parse(workflowText) as {
+  on?: { pull_request?: { branches?: string[] } };
+};
 const provisioningCompositeText = readFileSync(
   new URL(
     "../../cloud/shared/src/lib/services/provisioning-jobs-16639-lane.test.ts",
@@ -78,9 +83,7 @@ function extractMatrixCommands(): string[] {
 
 describe("Windows CI workflow", () => {
   test("gates pull requests into both protected development branches", () => {
-    expect(workflowText).toContain(
-      "  pull_request:\n    branches: [main, develop]\n",
-    );
+    expect(workflow.on?.pull_request?.branches).toEqual(["main", "develop"]);
   });
 
   test("keeps the shard lane set intentional", () => {
