@@ -26,6 +26,7 @@ import {
 	runV5MessageRuntimeStage1,
 } from "../services/message";
 import { runWithTrajectoryContext } from "../trajectory-context";
+import type { Action } from "../types/components";
 import type { Memory } from "../types/memory";
 import { ModelType } from "../types/model";
 import { ChannelType, type UUID } from "../types/primitives";
@@ -227,6 +228,27 @@ function makeRuntime(
 		],
 		responseHandlerEvaluators: evaluators ?? [],
 	} as IAgentRuntime;
+}
+
+function makeMemorySearchAction(minRole: "USER" | "OWNER" = "USER"): Action {
+	return {
+		name: "MEMORY",
+		description: "Search stored conversation records.",
+		contexts: ["memory"],
+		roleGate: { minRole },
+		parameters: [
+			{
+				name: "action",
+				description: "Memory operation.",
+				schema: { type: "string", enum: ["search"] },
+			},
+		],
+		validate: async () => true,
+		handler: async () => ({
+			success: true,
+			text: "Found stored conversation records.",
+		}),
+	};
 }
 
 function makePiiSession(): PseudonymSession {
@@ -1435,13 +1457,13 @@ describe("runV5MessageRuntimeStage1", () => {
 		expect(systemContent.length).toBeLessThan(3_800);
 	});
 
-	it("direct-channel prompt grounds capability denials in available_contexts and requires fresh tool retries", async () => {
+	it("direct-channel prompt grounds capability denials in role-visible actions and requires fresh tool retries", async () => {
 		// Mirror of the #11215 wording-regression test on the shared
 		// messageHandlerTemplate: Stage 1 for DM/API/SELF renders the compact
 		// DIRECT_MESSAGE_HANDLER_TEMPLATE instead, so the dashboard chat and
 		// 1:1 DMs — the primary surface where users hit "I don't have memory
-		// between sessions" / "I can't schedule" — need their own copies of
-		// the capability-denial and tool-retry rules.
+		// between sessions" / "I can't schedule" — need the same executable-
+		// action and tool-retry boundaries.
 		const runtime = makeRuntime([
 			stage1Response({
 				contexts: ["simple"],
@@ -1463,7 +1485,7 @@ describe("runV5MessageRuntimeStage1", () => {
 		const systemContent = params.messages?.[0]?.content ?? "";
 		expect(systemContent).toContain("task: Plan this direct message.");
 		expect(systemContent).toContain(
-			"Never deny a capability (memory, tasks, scheduling, reminders) when a matching context is in available_contexts — route to it; deny only when nothing matches.",
+			"Never deny a capability when current_turn_boundary says a role-visible executable action can attempt it. available_contexts supplies routing domains but does not by itself prove a handler exists.",
 		);
 		expect(systemContent).toContain(
 			"A tool that errored on an earlier turn may work now; on a repeated ask, retry it fresh and report this turn's result, not the old failure.",
@@ -3145,17 +3167,15 @@ describe("runV5MessageRuntimeStage1", () => {
 		);
 		// Live regression (2026-08-01, tj-69d82bb89ebb69): the "no separate
 		// chat-history search tool" sentence was unconditional, but on runtimes
-		// with a registered `memory` context it is FALSE — the memory actions DO
-		// search the stored message record. Stage 1 obeyed the denial verbatim
-		// and answered "how many times have i mentioned bitcoin?" from the
-		// bounded visible window instead of escalating. The denial is now
-		// conditional on the turn's role-filtered availableContexts containing a
-		// `memory` context — a structural capability check, never a match on the
-		// user's message text. Both branches must stay pinned: the no-memory
-		// branch keeps the honest denial (the 2026-05-25 fabricated-search
-		// guard), the memory branch declares the window bounded and routes
-		// beyond-window recall/count to the memory context.
+		// with a role-visible registered MEMORY search action it is FALSE. Stage 1
+		// obeyed the denial verbatim and answered "how many times have i mentioned
+		// bitcoin?" from the
+		// bounded visible window instead of escalating. A context entry alone is
+		// not executable proof; the action discriminator and role gate must also
+		// admit this turn. Both branches stay structural and never inspect prose.
 		expect(sourceText).toContain("hasMemoryRecallSurface");
+		expect(sourceText).toContain("searchDiscriminator");
+		expect(sourceText).toContain("canActionRun(action");
 		expect(sourceText).toContain(
 			"only the most recent window of a longer stored conversation",
 		);
@@ -3208,6 +3228,7 @@ describe("runV5MessageRuntimeStage1", () => {
 			},
 		]);
 		(runtime as { contexts?: ContextRegistry }).contexts = registry;
+		runtime.actions = [makeMemorySearchAction()];
 
 		const result = await runV5MessageRuntimeStage1({
 			runtime,
@@ -3269,6 +3290,88 @@ describe("runV5MessageRuntimeStage1", () => {
 		expect(userContent).not.toContain(
 			"only the most recent window of a longer stored conversation",
 		);
+	});
+
+	it("does not advertise chat-history search when the memory context has no executable action", async () => {
+		const runtime = makeRuntime([
+			stage1Response({
+				contexts: ["simple"],
+				replyText: "I don't see bitcoin in the recent messages I can see.",
+			}),
+		]);
+		(runtime as { contexts?: ContextRegistry }).contexts = new ContextRegistry([
+			{ id: "simple", label: "Simple", description: "Direct reply." },
+			{
+				id: "memory",
+				label: "Memory",
+				description: "Stored memories.",
+				roleGate: { minRole: "USER" },
+			},
+		]);
+
+		await runV5MessageRuntimeStage1({
+			runtime,
+			message: makeMessage({
+				text: "how many times have i mentioned bitcoin in this channel?",
+			}),
+			state: makeState(),
+			responseId: "00000000-0000-0000-0000-000000000008" as UUID,
+		});
+
+		const firstCallParams = useModelCalls(runtime)[0]?.[1] as
+			| {
+					messages?: Array<{ content?: string | null }>;
+			  }
+			| undefined;
+		const prompt = firstCallParams?.messages
+			?.map((message) => message.content ?? "")
+			.join("\n");
+		expect(prompt).toContain("there is no separate chat-history search tool");
+		expect(prompt).not.toContain("route it to the memory context");
+		expect(prompt).not.toContain("search it with MEMORY op:search");
+		expect(prompt).not.toContain(
+			"available_contexts lists a memory or recall context",
+		);
+	});
+
+	it("does not advertise chat-history search when the registered action is role-hidden", async () => {
+		const runtime = makeRuntime([
+			stage1Response({
+				contexts: ["simple"],
+				replyText: "I don't see bitcoin in the recent messages I can see.",
+			}),
+		]);
+		(runtime as { contexts?: ContextRegistry }).contexts = new ContextRegistry([
+			{ id: "simple", label: "Simple", description: "Direct reply." },
+			{
+				id: "memory",
+				label: "Memory",
+				description: "Stored memories.",
+				roleGate: { minRole: "USER" },
+			},
+		]);
+		runtime.actions = [makeMemorySearchAction("OWNER")];
+
+		await runV5MessageRuntimeStage1({
+			runtime,
+			message: makeMessage({
+				text: "how many times have i mentioned bitcoin in this channel?",
+			}),
+			state: makeState(),
+			responseId: "00000000-0000-0000-0000-000000000009" as UUID,
+		});
+
+		const firstCallParams = useModelCalls(runtime)[0]?.[1] as
+			| {
+					messages?: Array<{ content?: string | null }>;
+			  }
+			| undefined;
+		const prompt = firstCallParams?.messages
+			?.map((message) => message.content ?? "")
+			.join("\n");
+		expect(prompt).toContain("there is no separate chat-history search tool");
+		expect(prompt).not.toContain("route it to the memory context");
+		expect(prompt).not.toContain("search it with MEMORY op:search");
 	});
 
 	it("current_turn_boundary answers facts stated in the current message itself", async () => {

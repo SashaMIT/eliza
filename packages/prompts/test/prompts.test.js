@@ -635,17 +635,17 @@ describe("prompt templates (src/index.ts)", () => {
     const body = src.match(messageHandlerTemplateRe)[1];
     assert.match(
       body,
-      /Never tell the user you lack a capability — tasks, memory, scheduling, reminders, persistence, workflows — when a corresponding action or context is actually available this turn/,
+      /Never tell the user you lack a capability — tasks, memory, scheduling, reminders, persistence, workflows — when a corresponding executable action is available this turn/,
       "capability-denial rule should forbid denying capabilities the action surface exposes this turn",
     );
     assert.match(
       body,
-      /available_contexts and the action surface are the ground truth, so check them before denying/,
+      /The role-visible action surface is execution ground truth; available_contexts supplies routing domains but does not by itself prove a handler exists/,
       "capability-denial rule should ground the check in available_contexts and the action surface",
     );
     assert.match(
       body,
-      /If the action exists, route to it; deny a capability only when nothing on the surface can attempt it/,
+      /If an action exists, route to its context; deny a capability only when nothing executable can attempt it/,
       "capability-denial rule should redirect to the action instead of denying",
     );
     assert.match(
