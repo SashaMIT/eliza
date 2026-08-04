@@ -371,7 +371,9 @@ describe("gateway webhook handler e2e routing", () => {
     const event: ChatEvent = {
       platform: "telegram",
       messageId: "123",
+      platformRecordId: "456",
       chatId: "42",
+      chatType: "private",
       senderId: "42",
       senderName: "Ada",
       text: "same update id",
@@ -379,6 +381,7 @@ describe("gateway webhook handler e2e routing", () => {
     };
     const botA = createTelegramAdapter(event);
     const botB = createTelegramAdapter(event);
+    const forwardedBodies: Array<Record<string, unknown>> = [];
 
     globalThis.fetch = mock(async (input, init) => {
       const request = new Request(input, init);
@@ -398,6 +401,8 @@ describe("gateway webhook handler e2e routing", () => {
         );
       }
       if (request.url === "http://agent-server.local/agents/agent-1/message") {
+        const body = (await request.json()) as Record<string, unknown>;
+        forwardedBodies.push(body);
         return new Response(JSON.stringify({ response: "ok" }), {
           status: 200,
           headers: { "content-type": "application/json" },
@@ -438,6 +443,24 @@ describe("gateway webhook handler e2e routing", () => {
 
     expect(botA.replies).toEqual(["ok"]);
     expect(botB.replies).toEqual(["ok"]);
+    expect(forwardedBodies).toEqual([
+      expect.objectContaining({
+        platformName: "telegram",
+        senderName: "Ada",
+        chatId: "42",
+        accountId: "bot:218da20172ac4d99",
+        platformRecordId: "456",
+        chatType: "private",
+      }),
+      expect.objectContaining({
+        platformName: "telegram",
+        senderName: "Ada",
+        chatId: "42",
+        accountId: "bot:9c352facd71adf06",
+        platformRecordId: "456",
+        chatType: "private",
+      }),
+    ]);
     expect(
       [...redis.store.keys()].filter(
         (key) =>

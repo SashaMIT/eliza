@@ -1,11 +1,11 @@
 // Handles webhook gateway webhook handler behavior for authenticated connector fan-in.
-import { createHash } from "node:crypto";
 import type {
   ChatEvent,
   Platform,
   PlatformAdapter,
   WebhookConfig,
 } from "./adapters/types";
+import { resolveConnectorAccountId } from "./connector-account";
 import { logger } from "./logger";
 import type { GatewayRedis } from "./redis";
 import {
@@ -260,7 +260,7 @@ async function processMessage(
         platformName: adapter.platform,
         senderName: event.senderName,
         chatId: event.chatId,
-        accountId: resolveForwardAccountId(adapter.platform, config),
+        accountId: resolveConnectorAccountId(adapter.platform, config),
         platformRecordId: event.platformRecordId ?? event.messageId,
         chatType: event.chatType,
       },
@@ -298,28 +298,6 @@ async function processMessage(
       platform: adapter.platform,
     });
     throw err;
-  }
-}
-
-function credentialFingerprint(value: string): string {
-  return createHash("sha256").update(value).digest("hex").slice(0, 16);
-}
-
-function resolveForwardAccountId(
-  platform: Platform,
-  config: WebhookConfig,
-): string | undefined {
-  switch (platform) {
-    case "telegram":
-      return config.botToken
-        ? `bot:${credentialFingerprint(config.botToken)}`
-        : undefined;
-    case "whatsapp":
-      return config.phoneNumberId ?? config.businessPhone;
-    case "twilio":
-      return config.phoneNumber ?? config.accountSid;
-    case "blooio":
-      return config.fromNumber;
   }
 }
 
