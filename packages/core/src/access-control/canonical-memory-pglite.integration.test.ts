@@ -9,7 +9,9 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createMessageMemory } from "../memory";
 import {
 	attestDeliveryAudienceFromCanonicalRoom,
-	authorizeOwnerExclusiveDisclosure,
+	ownerExclusiveDisclosureWasUsed,
+	ownerExclusiveSuppressionNote,
+	revalidateOwnerExclusiveDisclosure,
 } from "../security/trusted-delivery-audience";
 import {
 	createTestRuntime,
@@ -167,11 +169,12 @@ describe("canonical connector memory recall on AgentRuntime + PGlite", () => {
 			content: { text: "what launch codes did I mention?", source: "telegram" },
 		});
 		await attestDeliveryAudienceFromCanonicalRoom(runtime, ownerTurn);
-		const ownerDecision = await authorizeOwnerExclusiveDisclosure(
+		const ownerDecision = await revalidateOwnerExclusiveDisclosure(
 			runtime,
 			ownerTurn,
 		);
 		expect(ownerDecision.allowed).toBe(true);
+		expect(ownerExclusiveDisclosureWasUsed(ownerTurn)).toBe(false);
 
 		const allowedRecall = await searchCanonicalConversationMemories({
 			runtime,
@@ -190,6 +193,7 @@ describe("canonical connector memory recall on AgentRuntime + PGlite", () => {
 		expect(
 			allowedRecall.items.map((item) => item.memory.content.text),
 		).toContain("Discord says the launch code is soliza-alpha.");
+		expect(ownerExclusiveDisclosureWasUsed(ownerTurn)).toBe(true);
 
 		await testRuntime.cleanup();
 		testRuntime = await createTestRuntime({
@@ -248,7 +252,7 @@ describe("canonical connector memory recall on AgentRuntime + PGlite", () => {
 			},
 		});
 		await attestDeliveryAudienceFromCanonicalRoom(runtime, groupTurn);
-		const groupDecision = await authorizeOwnerExclusiveDisclosure(
+		const groupDecision = await revalidateOwnerExclusiveDisclosure(
 			runtime,
 			groupTurn,
 		);
@@ -273,8 +277,68 @@ describe("canonical connector memory recall on AgentRuntime + PGlite", () => {
 				expect.objectContaining({
 					code: "cross_room_denied",
 					dedupeKey: "discord:discord-main:private-discord-message",
+					reason:
+						"cross-room recall denied by trusted delivery audience: participant_mismatch",
 				}),
 			]),
 		);
+		expect(ownerExclusiveDisclosureWasUsed(groupTurn)).toBe(false);
+		expect(ownerExclusiveSuppressionNote(groupTurn)).toBeUndefined();
+	});
+
+	it("does not taint egress for same-room-only owner-private searches", async () => {
+		if (!testRuntime) throw new Error("runtime not initialized");
+		const { runtime } = testRuntime;
+		await ensureRoom(OWNER_DM_ROOM, OWNER, ChannelType.DM, "telegram");
+		await runtime.createMemory(
+			canonicalMessage({
+				id: stringToUuid("same-room-telegram"),
+				entityId: OWNER,
+				roomId: OWNER_DM_ROOM,
+				source: "telegram",
+				accountId: "telegram-main",
+				platformMessageId: "same-room-telegram-message",
+				text: "Same-room note: the package is under the blue mat.",
+				embedding: vector(1),
+			}),
+			"messages",
+		);
+
+		const ownerTurn = createMessageMemory({
+			entityId: OWNER,
+			agentId: runtime.agentId,
+			roomId: OWNER_DM_ROOM,
+			content: {
+				text: "where is the package?",
+				source: "telegram",
+			},
+		});
+		await attestDeliveryAudienceFromCanonicalRoom(runtime, ownerTurn);
+
+		const sameRoomRecall = await searchCanonicalConversationMemories({
+			runtime,
+			embedding: vector(1),
+			query: "package",
+			agentId: runtime.agentId,
+			deliveryMessage: ownerTurn,
+			count: 10,
+			matchThreshold: 0,
+		});
+
+		expect(sameRoomRecall.items.map((item) => item.dedupeKey)).toEqual([
+			"telegram:telegram-main:same-room-telegram-message",
+		]);
+		expect(sameRoomRecall.withheld).toEqual([]);
+		expect(sameRoomRecall.availability).toBe("complete");
+		expect(ownerExclusiveDisclosureWasUsed(ownerTurn)).toBe(false);
+
+		await ensureRoom(OWNER_DM_ROOM, GUEST, ChannelType.DM, "telegram");
+		await expect(
+			revalidateOwnerExclusiveDisclosure(runtime, ownerTurn),
+		).resolves.toMatchObject({
+			allowed: false,
+			reason: "audience_changed",
+		});
+		expect(ownerExclusiveDisclosureWasUsed(ownerTurn)).toBe(false);
 	});
 });

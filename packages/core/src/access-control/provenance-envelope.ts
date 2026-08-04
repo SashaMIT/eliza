@@ -34,7 +34,13 @@
 
 import { buildAccessContext } from "../access-context";
 import { normalizeConnectorSource } from "../connectors";
-import { authorizeOwnerExclusiveDisclosure } from "../security/trusted-delivery-audience";
+import {
+	INTERNAL_AGENT_TURN_DISCLOSURE_BASIS,
+	markOwnerExclusiveDisclosureUsed,
+	OWNER_PRIVATE_DESTINATION_DISCLOSURE_BASIS,
+	type OwnerExclusiveDisclosureDecision,
+	revalidateOwnerExclusiveDisclosure,
+} from "../security/trusted-delivery-audience";
 import type {
 	AccessContext,
 	IAgentRuntime,
@@ -341,7 +347,40 @@ export interface CanonicalRecallInput {
 
 interface CanonicalRecallEvaluationInput extends CanonicalRecallInput {
 	/** Derived only inside this module from process-local trusted audience evidence. */
-	crossRoomAudienceAuthorized: boolean;
+	crossRoomGate: CrossRoomRecallGate;
+}
+
+type CrossRoomRecallGate =
+	| { allowed: true }
+	| { allowed: false; reason: string };
+
+function assertNever(value: never): never {
+	throw new Error(`Unhandled owner-exclusive disclosure basis: ${value}`);
+}
+
+function deniedCrossRoomGateReason(
+	decision: OwnerExclusiveDisclosureDecision,
+): string {
+	if (!decision.allowed) {
+		return `cross-room recall denied by trusted delivery audience: ${decision.reason}`;
+	}
+	switch (decision.basis) {
+		case OWNER_PRIVATE_DESTINATION_DISCLOSURE_BASIS:
+			return "cross-room recall is allowed";
+		case INTERNAL_AGENT_TURN_DISCLOSURE_BASIS:
+			return "cross-room recall requires a verified owner-private destination, not an internal agent turn";
+		default:
+			return assertNever(decision.basis);
+	}
+}
+
+function crossRoomRecallGate(
+	decision: OwnerExclusiveDisclosureDecision,
+): CrossRoomRecallGate {
+	return decision.allowed &&
+		decision.basis === OWNER_PRIVATE_DESTINATION_DISCLOSURE_BASIS
+		? { allowed: true }
+		: { allowed: false, reason: deniedCrossRoomGateReason(decision) };
 }
 
 /**
@@ -399,15 +438,14 @@ function evaluateCanonicalRecall(
 		}
 
 		if (
-			!input.crossRoomAudienceAuthorized &&
+			!input.crossRoomGate.allowed &&
 			provenance.roomId !== input.destinationRoomId
 		) {
 			withholdOnce({
 				dedupeKey,
 				source: provenance.source,
 				code: "cross_room_denied",
-				reason:
-					"cross-room recall requires a revalidated trusted delivery audience",
+				reason: input.crossRoomGate.reason,
 			});
 			continue;
 		}
@@ -430,7 +468,10 @@ export function buildCanonicalRecall(
 ): Omit<CanonicalRecallResult, "availability"> {
 	return evaluateCanonicalRecall({
 		...input,
-		crossRoomAudienceAuthorized: false,
+		crossRoomGate: {
+			allowed: false,
+			reason: "cross-room recall is disabled for direct canonical evaluation",
+		},
 	});
 }
 
@@ -458,7 +499,7 @@ export interface CanonicalMemorySearchInput {
 export async function searchCanonicalConversationMemories(
 	input: CanonicalMemorySearchInput,
 ): Promise<CanonicalRecallResult> {
-	const disclosure = await authorizeOwnerExclusiveDisclosure(
+	const disclosure = await revalidateOwnerExclusiveDisclosure(
 		input.runtime,
 		input.deliveryMessage,
 	);
@@ -466,8 +507,7 @@ export async function searchCanonicalConversationMemories(
 		input.runtime,
 		input.deliveryMessage,
 	);
-	const crossRoomAudienceAuthorized =
-		disclosure.allowed && disclosure.basis === "owner_private_destination";
+	const crossRoomGate = crossRoomRecallGate(disclosure);
 
 	const candidates = await input.runtime.searchMemories({
 		embedding: input.embedding,
@@ -484,7 +524,7 @@ export async function searchCanonicalConversationMemories(
 		agentId: input.agentId,
 		requester,
 		destinationRoomId: input.deliveryMessage.roomId,
-		crossRoomAudienceAuthorized,
+		crossRoomGate,
 	});
 
 	// A source filter narrows what the caller asked to see; it never narrows
@@ -502,6 +542,13 @@ export async function searchCanonicalConversationMemories(
 				(item) => item.source === undefined || item.source === normalizedSource,
 			)
 		: evaluated.withheld;
+	if (
+		items.some(
+			(item) => item.provenance.roomId !== input.deliveryMessage.roomId,
+		)
+	) {
+		markOwnerExclusiveDisclosureUsed(input.deliveryMessage);
+	}
 
 	const availability: RecallAvailability =
 		withheld.length > 0
