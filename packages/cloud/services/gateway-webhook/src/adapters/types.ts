@@ -17,6 +17,12 @@ export interface ChatEvent {
 
 export interface PlatformAdapter {
   platform: Platform;
+  getDedupeScope?(
+    config: WebhookConfig,
+    event: ChatEvent,
+    project: string,
+    agentId?: string,
+  ): string;
   verifyWebhook(
     request: Request,
     rawBody: string,

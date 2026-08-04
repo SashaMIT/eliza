@@ -1,5 +1,6 @@
 // Handles webhook gateway telegram behavior for authenticated connector fan-in.
 import crypto from "node:crypto";
+import { resolveConnectorAccountId } from "../connector-account";
 import { logger } from "../logger";
 import type { ChatEvent, PlatformAdapter, WebhookConfig } from "./types";
 
@@ -76,6 +77,15 @@ interface TelegramUpdate {
 
 export const telegramAdapter: PlatformAdapter = {
   platform: "telegram",
+
+  getDedupeScope(
+    config: WebhookConfig,
+    _event: ChatEvent,
+    project: string,
+  ): string {
+    const accountId = resolveConnectorAccountId("telegram", config);
+    return `project:${project}:account:${accountId ?? "bot:missing"}`;
+  },
 
   async verifyWebhook(
     request: Request,
