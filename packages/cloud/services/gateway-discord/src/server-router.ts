@@ -152,8 +152,24 @@ export async function forwardToServer(
   agentId: string,
   userId: string,
   text: string,
+  options?: {
+    accountId?: string;
+    platformRecordId?: string;
+    chatId?: string;
+    chatType?: string;
+  },
 ): Promise<string> {
-  const body = JSON.stringify({ userId, text });
+  const body = JSON.stringify({
+    userId,
+    text,
+    platformName: "discord",
+    ...(options?.accountId ? { accountId: options.accountId } : {}),
+    ...(options?.platformRecordId
+      ? { platformRecordId: options.platformRecordId }
+      : {}),
+    ...(options?.chatId ? { chatId: options.chatId } : {}),
+    ...(options?.chatType ? { chatType: options.chatType } : {}),
+  });
 
   let lastError: Error | null = null;
   let woken = false;

@@ -119,7 +119,9 @@ export const telegramAdapter: PlatformAdapter = {
     return {
       platform: "telegram",
       messageId: `${update.update_id}`,
+      platformRecordId: `${message.message_id}`,
       chatId: `${message.chat.id}`,
+      chatType: message.chat.type,
       senderId: `${message.from?.id ?? message.chat.id}`,
       senderName: message.from?.first_name,
       text,

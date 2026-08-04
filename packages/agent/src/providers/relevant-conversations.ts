@@ -16,7 +16,12 @@ import type {
   State,
   UUID,
 } from "@elizaos/core";
-import { embedRecallQuery, stringToUuid } from "@elizaos/core";
+import {
+  authorizeOwnerExclusiveDisclosure,
+  embedRecallQuery,
+  searchCanonicalConversationMemories,
+  stringToUuid,
+} from "@elizaos/core";
 import { getValidationKeywordTerms } from "@elizaos/shared";
 import {
   extractConversationMetadataFromRoom,
@@ -129,6 +134,14 @@ export const relevantConversationsProvider: Provider = {
         return { text: "", values: {}, data: {} };
       }
 
+      const disclosure = await authorizeOwnerExclusiveDisclosure(
+        runtime,
+        message,
+      );
+      if (!disclosure.allowed) {
+        return { text: "", values: {}, data: {} };
+      }
+
       // Lexical hash-memory recall mirrors the /api/memory/remember writer and
       // works even when no TEXT_EMBEDDING model is registered.
       const hashMemories = await loadHashMemories(runtime, text);
@@ -141,12 +154,17 @@ export const relevantConversationsProvider: Provider = {
       const embedding = await embedRecallQuery(runtime, text);
       const results: Memory[] =
         embedding && embedding.length > 0
-          ? await runtime.searchMemories({
-              embedding,
-              tableName: "messages",
-              match_threshold: MATCH_THRESHOLD,
-              limit: MAX_RELEVANT_RESULTS + 5, // fetch extra to filter current room
-            })
+          ? (
+              await searchCanonicalConversationMemories({
+                runtime,
+                embedding,
+                query: text,
+                agentId: runtime.agentId,
+                deliveryMessage: message,
+                count: MAX_RELEVANT_RESULTS + 5,
+                matchThreshold: MATCH_THRESHOLD,
+              })
+            ).items.map((item) => item.memory)
           : [];
 
       // Filter out messages from the current conversation to avoid echo, dedupe

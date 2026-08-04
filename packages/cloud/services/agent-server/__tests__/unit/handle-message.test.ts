@@ -102,6 +102,53 @@ describe("AgentManager.handleMessage fail-closed message pipeline", () => {
     expect(handleMessage).toHaveBeenCalledTimes(1);
   });
 
+  test("passes canonical connector provenance to the runtime message pipeline", async () => {
+    const manager = new AgentManager();
+    let received: Memory | undefined;
+    const handleMessage = mock(
+      async (_rt: IAgentRuntime, mem: Memory, callback?: HandlerCallback) => {
+        received = mem;
+        await callback?.({ text: "ok" });
+        return OK_RESULT;
+      },
+    );
+    withRunningAgent(
+      manager,
+      "agent-1",
+      makeRuntime({
+        messageService: { handleMessage } as unknown as IMessageService,
+      }),
+    );
+
+    await manager.handleMessage("agent-1", "discord-user-42", "hi", {
+      platformName: "discord",
+      senderName: "Alice",
+      chatId: "channel-9",
+      accountId: "connection-1",
+      platformRecordId: "message-123",
+      chatType: "group",
+    });
+
+    expect(received?.content).toMatchObject({
+      text: "hi",
+      source: "discord",
+      channelType: "GROUP",
+    });
+    expect(received?.metadata).toMatchObject({
+      provider: "discord",
+      accountId: "connection-1",
+      platformMessageId: "message-123",
+      sourceId: "message-123",
+      scope: "private",
+      chatType: "group",
+      discord: {
+        userId: "discord-user-42",
+        accountId: "connection-1",
+        messageId: "message-123",
+      },
+    });
+  });
+
   test("returns empty string (not a fabricated literal) on a deliberate no-response", async () => {
     const manager = new AgentManager();
     const handleMessage = mock(

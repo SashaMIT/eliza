@@ -21,21 +21,20 @@
  *
  * 3. {@link searchCanonicalConversationMemories} — the production retrieval
  *    for conversation-mode message search. It runs, in order: provenance
- *    validation, the mandatory scope ladder (`./filter.ts`), and same-room
- *    containment. Cross-room recall is DENIED here unconditionally: deciding
- *    that a recalled item may cross into a different destination is audience
- *    policy, and audience policy is owned by the trusted-delivery-audience
- *    layer (PR #17206), which attests the destination from `runtime.getRoom` +
- *    `getParticipantsForRoom` rather than anything a caller declares. When
- *    that layer wants to authorize a wider audience it does so at its own
- *    seams; this module never grows a policy knob for callers to widen.
+ *    validation, the mandatory scope ladder (`./filter.ts`), and destination
+ *    containment. Cross-room recall is denied unless this module revalidates
+ *    the actual inbound delivery message against the trusted delivery-audience
+ *    seam; callers cannot pass a policy boolean or request-body room claim.
  *
  * Composes with — never duplicates — `./filter.ts`: that ladder gates a single
- * memory's {@link MemoryScope} against the requester's role; the same-room rule
- * here additionally pins the item to the room it already lives in, so recall
- * discloses nothing a destination does not already hold.
+ * memory's {@link MemoryScope} against the requester's role; this module then
+ * pins disclosure to the destination unless the trusted delivery-audience layer
+ * has revalidated the live room type and participants for owner-only recall.
  */
+
+import { buildAccessContext } from "../access-context";
 import { normalizeConnectorSource } from "../connectors";
+import { authorizeOwnerExclusiveDisclosure } from "../security/trusted-delivery-audience";
 import type {
 	AccessContext,
 	IAgentRuntime,
@@ -340,21 +339,26 @@ export interface CanonicalRecallInput {
 	destinationRoomId: UUID;
 }
 
+interface CanonicalRecallEvaluationInput extends CanonicalRecallInput {
+	/** Derived only inside this module from process-local trusted audience evidence. */
+	crossRoomAudienceAuthorized: boolean;
+}
+
 /**
  * Normalize, authorize, contain, and de-duplicate a set of candidate memories
  * into one canonical recall result.
  *
  * Order is load-bearing: provenance validation, then the MANDATORY scope
- * ladder, then same-room containment, then dedupe. There is no policy object
- * to swap and therefore no way for a caller to widen the audience; cross-room
- * authorization belongs to the trusted-delivery-audience layer (#17206).
+ * ladder, then destination containment, then dedupe. Cross-room authorization
+ * must be proved by the trusted-delivery-audience layer before this function is
+ * called; absent that proof, same-room containment is the fail-closed default.
  *
  * De-duplication keeps the earliest-created member of each
  * {@link canonicalDedupeKey} group, so a redelivered webhook does not
  * double-count and does not reorder the transcript.
  */
-export function buildCanonicalRecall(
-	input: CanonicalRecallInput,
+function evaluateCanonicalRecall(
+	input: CanonicalRecallEvaluationInput,
 ): Omit<CanonicalRecallResult, "availability"> {
 	const actor = actorFromAccessContext(input.requester, input.agentId);
 
@@ -394,13 +398,16 @@ export function buildCanonicalRecall(
 			continue;
 		}
 
-		if (provenance.roomId !== input.destinationRoomId) {
+		if (
+			!input.crossRoomAudienceAuthorized &&
+			provenance.roomId !== input.destinationRoomId
+		) {
 			withholdOnce({
 				dedupeKey,
 				source: provenance.source,
 				code: "cross_room_denied",
 				reason:
-					"cross-room recall requires the trusted delivery-audience layer; this envelope only recalls into the item's own room",
+					"cross-room recall requires a revalidated trusted delivery audience",
 			});
 			continue;
 		}
@@ -418,13 +425,22 @@ export function buildCanonicalRecall(
 	return { items, withheld };
 }
 
+export function buildCanonicalRecall(
+	input: CanonicalRecallInput,
+): Omit<CanonicalRecallResult, "availability"> {
+	return evaluateCanonicalRecall({
+		...input,
+		crossRoomAudienceAuthorized: false,
+	});
+}
+
 export interface CanonicalMemorySearchInput {
 	runtime: IAgentRuntime;
 	embedding: number[];
 	query?: string;
 	agentId: UUID;
-	requester: AccessContext;
-	destinationRoomId: UUID;
+	/** Exact in-memory delivery turn the recalled context will be rendered into. */
+	deliveryMessage: Memory;
 	count: number;
 	matchThreshold?: number;
 	entityId?: UUID;
@@ -442,6 +458,17 @@ export interface CanonicalMemorySearchInput {
 export async function searchCanonicalConversationMemories(
 	input: CanonicalMemorySearchInput,
 ): Promise<CanonicalRecallResult> {
+	const disclosure = await authorizeOwnerExclusiveDisclosure(
+		input.runtime,
+		input.deliveryMessage,
+	);
+	const requester = await buildAccessContext(
+		input.runtime,
+		input.deliveryMessage,
+	);
+	const crossRoomAudienceAuthorized =
+		disclosure.allowed && disclosure.basis === "owner_private_destination";
+
 	const candidates = await input.runtime.searchMemories({
 		embedding: input.embedding,
 		tableName: "messages",
@@ -449,14 +476,15 @@ export async function searchCanonicalConversationMemories(
 		count: input.count,
 		...(input.query ? { query: input.query } : {}),
 		...(input.entityId ? { entityId: input.entityId } : {}),
-		accessContext: input.requester,
+		accessContext: requester,
 	});
 
-	const evaluated = buildCanonicalRecall({
+	const evaluated = evaluateCanonicalRecall({
 		candidates,
 		agentId: input.agentId,
-		requester: input.requester,
-		destinationRoomId: input.destinationRoomId,
+		requester,
+		destinationRoomId: input.deliveryMessage.roomId,
+		crossRoomAudienceAuthorized,
 	});
 
 	// A source filter narrows what the caller asked to see; it never narrows

@@ -17,12 +17,33 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 // (relied on by @elizaos/shared and the provider's helper modules) intact.
 const embedRecallQuery =
   vi.fn<(runtime: IAgentRuntime, text: string) => Promise<number[] | null>>();
+const authorizeOwnerExclusiveDisclosure = vi.fn(
+  async (): Promise<Record<string, unknown>> => ({ allowed: true }),
+);
+const searchCanonicalConversationMemories = vi.fn(
+  async (input: { runtime: IAgentRuntime; embedding: number[] }) => ({
+    items: (
+      await input.runtime.searchMemories({
+        embedding: input.embedding,
+        tableName: "messages",
+      })
+    ).map((memory) => ({
+      memory,
+      provenance: {},
+      dedupeKey: memory.id ?? "memory",
+    })),
+    withheld: [],
+    availability: "complete",
+  }),
+);
 vi.mock("@elizaos/core", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@elizaos/core")>();
   return {
     ...actual,
     embedRecallQuery: (runtime: IAgentRuntime, text: string) =>
       embedRecallQuery(runtime, text),
+    authorizeOwnerExclusiveDisclosure,
+    searchCanonicalConversationMemories,
   };
 });
 
@@ -75,6 +96,9 @@ const EMPTY_STATE = { values: {}, data: {}, text: "" } as unknown as State;
 describe("relevantConversationsProvider — shared recall embed fail-open", () => {
   afterEach(() => {
     embedRecallQuery.mockReset();
+    authorizeOwnerExclusiveDisclosure.mockClear();
+    authorizeOwnerExclusiveDisclosure.mockResolvedValue({ allowed: true });
+    searchCanonicalConversationMemories.mockClear();
   });
 
   it("returns the empty result and never searches when the shared embed fails open (null)", async () => {
@@ -107,10 +131,41 @@ describe("relevantConversationsProvider — shared recall embed fail-open", () =
     );
 
     expect(embedRecallQuery).toHaveBeenCalledTimes(1);
+    expect(searchCanonicalConversationMemories).toHaveBeenCalledWith(
+      expect.objectContaining({
+        embedding: [0.1, 0.2, 0.3],
+        deliveryMessage: expect.objectContaining({
+          roomId: ROOM_ID,
+          content: expect.objectContaining({
+            text: "what did we decide about the launch date",
+          }),
+        }),
+      }),
+    );
     expect(searchMemories).toHaveBeenCalledWith(
       expect.objectContaining({ embedding: [0.1, 0.2, 0.3] }),
     );
     expect(result.text).toContain("Relevant past conversations:");
+  });
+
+  it("withholds relevant conversation context when the destination is not owner-private", async () => {
+    authorizeOwnerExclusiveDisclosure.mockResolvedValueOnce({
+      allowed: false,
+      reason: "destination_not_private",
+    });
+    embedRecallQuery.mockResolvedValue([0.1, 0.2, 0.3]);
+    const { runtime, searchMemories } = makeRuntime();
+
+    const result = await relevantConversationsProvider.get(
+      runtime,
+      makeMessage("what did we decide about the launch date"),
+      EMPTY_STATE,
+    );
+
+    expect(result).toEqual({ text: "", values: {}, data: {} });
+    expect(embedRecallQuery).not.toHaveBeenCalled();
+    expect(searchCanonicalConversationMemories).not.toHaveBeenCalled();
+    expect(searchMemories).not.toHaveBeenCalled();
   });
 
   it("surfaces lexical hash memories even when the embed fails open (null)", async () => {

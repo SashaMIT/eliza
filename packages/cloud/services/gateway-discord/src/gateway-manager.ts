@@ -1330,6 +1330,12 @@ export class GatewayManager {
         conn.characterId,
         userId,
         message.content,
+        {
+          accountId: connectionId,
+          platformRecordId: message.id,
+          chatId: message.channelId,
+          chatType: message.guildId ? "group" : "dm",
+        },
       );
 
       if (response) {

@@ -4,7 +4,9 @@ export type Platform = "telegram" | "blooio" | "twilio" | "whatsapp";
 export interface ChatEvent {
   platform: Platform;
   messageId: string;
+  platformRecordId?: string;
   chatId: string;
+  chatType?: string;
   senderId: string;
   senderName?: string;
   text: string;
